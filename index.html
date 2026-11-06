@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>MiniC: a C compiler in your browser</title>
+<meta name="description" content="Type C code and watch it become tokens, a syntax tree, x86-64 assembly and program output. MiniC is a C compiler written from scratch.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚙️</text></svg>">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#f6f3ee;--sf:#fffdf9;--ink:#1b1a17;--mu:#6b655b;--ln:#ddd5c8;--ac:#c2410c;--ai:#fff;--er:#b91c1c;--ok:#15803d;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#15130f;--sf:#1d1a15;--ink:#ece7de;--mu:#a39b8d;--ln:#363026;--ac:#fb923c;--ai:#1b1209;--er:#f87171;--ok:#4ade80}}
+:root[data-theme=dark]{--bg:#15130f;--sf:#1d1a15;--ink:#ece7de;--mu:#a39b8d;--ln:#363026;--ac:#fb923c;--ai:#1b1209;--er:#f87171;--ok:#4ade80}
+*{box-sizing:border-box}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+.w{max-width:1100px;margin:0 auto;padding:0 18px}
+header{padding:40px 0 18px}
+h1{font:700 clamp(2rem,6vw,3rem)/1.05 "Bricolage Grotesque",system-ui,sans-serif;margin:0 0 8px;letter-spacing:-.02em}
+.sub{color:var(--mu);margin:0;max-width:62ch}
+.bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:20px 0 12px}
+select,button{font:inherit;border-radius:10px;min-height:44px}
+select{background:var(--sf);color:var(--ink);border:1.5px solid var(--ln);padding:0 12px}
+button.run{background:var(--ac);color:var(--ai);border:0;font-weight:700;padding:0 24px;cursor:pointer}
+.hint{color:var(--mu);font-size:.85rem}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:820px){.grid{grid-template-columns:1fr}}
+textarea,pre{font:14px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;margin:0;background:var(--sf);color:var(--ink);border:1.5px solid var(--ln);border-radius:12px;padding:14px;width:100%;height:440px;overflow:auto;tab-size:4;resize:vertical}
+pre{white-space:pre-wrap;word-break:break-word}
+textarea:focus,button:focus-visible,select:focus-visible,[role=tab]:focus-visible{outline:3px solid var(--ac);outline-offset:2px}
+.tabs{display:flex;gap:4px;margin-bottom:8px;overflow-x:auto}
+[role=tab]{background:transparent;color:var(--mu);border:1.5px solid transparent;padding:0 14px;min-height:38px;cursor:pointer;font-weight:600;white-space:nowrap}
+[role=tab][aria-selected=true]{color:var(--ink);border-color:var(--ln);background:var(--sf)}
+.st{margin:10px 0 0;font-size:.9rem;min-height:1.4em}
+.st.err{color:var(--er)}.st.ok{color:var(--ok)}
+.pipe{display:flex;gap:6px;flex-wrap:wrap;margin:26px 0 8px;font-size:.88rem;color:var(--mu)}
+.pipe b{color:var(--ink);border:1.5px solid var(--ln);background:var(--sf);border-radius:99px;padding:2px 12px;font-weight:600}
+footer{padding:14px 0 48px;color:var(--mu);font-size:.88rem}
+footer a{color:var(--ac)}
+</style>
+</head>
+<body>
+<!--
+  MiniC web demo. The compiler below is a JavaScript port of minic.py:
+  lexer -> parser -> semantic check -> x86-64 code generator, plus an interpreter.
+  Runs entirely in your browser: nothing is uploaded.
+-->
+<div class="w">
+<header>
+  <h1>MiniC</h1>
+  <p class="sub">A C compiler written from scratch. Type C code, press Run, and see every stage: tokens, syntax tree, x86-64 assembly and the program’s output. Everything runs in your browser.</p>
+</header>
+<div class="bar">
+  <label class="hint" for="ex">Example</label>
+  <select id="ex" aria-label="Choose an example"></select>
+  <button class="run" id="run">Run ▶</button>
+  <span class="hint">Ctrl + Enter</span>
+</div>
+<div class="grid">
+  <textarea id="src" spellcheck="false" aria-label="MiniC source code"></textarea>
+  <div>
+    <div class="tabs" role="tablist" id="tabs"></div>
+    <pre id="pane" role="tabpanel" aria-live="polite"></pre>
+  </div>
+</div>
+<p class="st" id="st" aria-live="polite"></p>
+<div class="pipe"><b>Lexer</b>→<b>Parser</b>→<b>Semantic check</b>→<b>Code generator</b>→<b>Assembly</b></div>
+<footer>Supports <code>int</code>, functions, recursion, <code>if/else</code>, <code>while</code>, <code>for</code>, <code>&amp;&amp; || !</code> and <code>print(x)</code>. Source and docs: <a href="https://github.com/ridafatimazulfiqar/minic-compiler">github.com/ridafatimazulfiqar/minic-compiler</a></footer>
+</div>
+<script>
+//CORE-START
+class CErr extends Error{}
+const KW=new Set(["int","if","else","while","for","return"]);
+function lex(src){
+  const re=/(\s+|\/\/[^\n]*|\/\*[\s\S]*?\*\/)|(\d+)|([A-Za-z_]\w*)|(==|!=|<=|>=|&&|\|\||[-+*\/%<>=!(){};,])/y,t=[];let line=1;
+  while(re.lastIndex<src.length){
+    const p=re.lastIndex,m=re.exec(src);
+    if(!m)throw new CErr(`line ${line}: unexpected character '${src[p]}'`);
+    if(m[1]!==undefined)line+=(m[1].match(/\n/g)||[]).length;
+    else if(m[2]!==undefined)t.push({k:"num",v:m[2],l:line});
+    else if(m[3]!==undefined)t.push({k:KW.has(m[3])?"kw":"id",v:m[3],l:line});
+    else t.push({k:"op",v:m[4],l:line});
+  }
+  t.push({k:"eof",v:"",l:line});return t;
+}
+function parse(T){
+  let i=0;
+  const at=s=>(T[i].k==="op"||T[i].k==="kw")&&T[i].v===s;
+  const eat=(s,kind)=>{const t=T[i],f=t.v||"end of file";
+    if(s!==undefined&&!(t.v===s&&(t.k==="op"||t.k==="kw")))throw new CErr(`line ${t.l}: expected '${s}' but found '${f}'`);
+    if(kind&&t.k!==kind)throw new CErr(`line ${t.l}: expected ${kind} but found '${f}'`);
+    i++;return t.v;};
+  const L=[["||"],["&&"],["==","!="],["<",">","<=",">="],["+","-"],["*","/","%"]];
+  function prim(){const t=T[i];
+    if(t.k==="num"){i++;return["num",+t.v];}
+    if(t.k==="id"){i++;
+      if(at("(")){eat("(");const a=[];if(!at(")")){a.push(expr());while(at(",")){eat(",");a.push(expr());}}eat(")");return["call",t.v,a,t.l];}
+      return["var",t.v,t.l];}
+    if(at("(")){eat("(");const e=expr();eat(")");return e;}
+    throw new CErr(`line ${t.l}: unexpected '${t.v||"end of file"}'`);}
+  const un=()=>at("-")||at("!")?["un",eat(),un()]:prim();
+  function bin(lv){if(lv===L.length)return un();let l=bin(lv+1);
+    while(T[i].k==="op"&&L[lv].includes(T[i].v)){const op=eat();l=["bin",op,l,bin(lv+1)];}return l;}
+  function expr(){const l=bin(0);
+    if(at("=")){const ln=T[i].l;if(l[0]!=="var")throw new CErr(`line ${ln}: left side of '=' must be a variable`);eat("=");return["assign",l[1],expr(),ln];}
+    return l;}
+  function decl(){eat("int");const n=eat(undefined,"id");let init=null;if(at("=")){eat("=");init=expr();}eat(";");return["decl",n,init];}
+  function stmt(){
+    if(at("int"))return decl();
+    if(at("{"))return block();
+    if(at("if")){eat("if");eat("(");const c=expr();eat(")");const t=stmt();let e=null;if(at("else")){eat("else");e=stmt();}return["if",c,t,e];}
+    if(at("while")){eat("while");eat("(");const c=expr();eat(")");return["while",c,stmt()];}
+    if(at("for")){eat("for");eat("(");let init=null;
+      if(at("int"))init=decl();else if(at(";"))eat(";");else{init=["expr",expr()];eat(";");}
+      const c=at(";")?null:expr();eat(";");const p=at(")")?null:expr();eat(")");return["for",init,c,p,stmt()];}
+    if(at("return")){eat("return");const v=expr();eat(";");return["ret",v];}
+    const v=expr();eat(";");return["expr",v];}
+  function block(){eat("{");const s=[];while(!at("}"))s.push(stmt());eat("}");return["block",s];}
+  const prog=[];
+  while(T[i].k!=="eof"){eat("int");const n=eat(undefined,"id");eat("(");const ps=[];
+    if(!at(")")){for(;;){eat("int");ps.push(eat(undefined,"id"));if(!at(","))break;eat(",");}}
+    eat(")");prog.push([n,ps,block()]);}
+  return prog;
+}
+function check(prog){
+  const F=Object.assign(Object.create(null),{print:1});
+  for(const[n,ps]of prog){
+    if(n in F)throw new CErr(`function '${n}' is defined twice`);
+    if(ps.length>6)throw new CErr(`function '${n}': at most 6 parameters are supported`);
+    if(new Set(ps).size!==ps.length)throw new CErr(`function '${n}': duplicate parameter name`);
+    F[n]=ps.length;}
+  if(!("main"in F))throw new CErr("no 'main' function");
+  const ex=(e,S)=>{const k=e[0];
+    if(k==="var"||k==="assign"){if(!S.some(s=>s.has(e[1])))throw new CErr(`line ${e[e.length-1]}: '${e[1]}' is not declared`);if(k==="assign")ex(e[2],S);}
+    else if(k==="un")ex(e[2],S);
+    else if(k==="bin"){ex(e[2],S);ex(e[3],S);}
+    else if(k==="call"){
+      if(!(e[1]in F))throw new CErr(`line ${e[3]}: function '${e[1]}' is not defined`);
+      if(e[2].length!==F[e[1]])throw new CErr(`line ${e[3]}: '${e[1]}' expects ${F[e[1]]} argument(s), got ${e[2].length}`);
+      e[2].forEach(a=>ex(a,S));}};
+  const st=(s,S)=>{const k=s[0],top=()=>S[S.length-1];
+    if(k==="block"){S.push(new Set());s[1].forEach(x=>st(x,S));S.pop();}
+    else if(k==="decl"){if(s[2])ex(s[2],S);if(top().has(s[1]))throw new CErr(`'${s[1]}' is declared twice in the same scope`);top().add(s[1]);}
+    else if(k==="expr"||k==="ret")ex(s[1],S);
+    else if(k==="if"){ex(s[1],S);st(s[2],S);if(s[3])st(s[3],S);}
+    else if(k==="while"){ex(s[1],S);st(s[2],S);}
+    else if(k==="for"){S.push(new Set());if(s[1])st(s[1],S);if(s[2])ex(s[2],S);if(s[3])ex(s[3],S);st(s[4],S);S.pop();}};
+  for(const[,ps,b]of prog)st(b,[new Set(ps)]);
+}
+const AR=["%rdi","%rsi","%rdx","%rcx","%r8","%r9"],CC={"<":"l",">":"g","<=":"le",">=":"ge","==":"e","!=":"ne"};
+const cnt=s=>!s?0:s[0]==="decl"?1:s[0]==="block"?s[1].reduce((a,x)=>a+cnt(x),0):s[0]==="if"?cnt(s[2])+cnt(s[3]):s[0]==="while"?cnt(s[2]):s[0]==="for"?cnt(s[1])+cnt(s[4]):0;
+function gen(prog){
+  const o=[];let n=0,sc,slot,dep,ret;
+  const em=l=>o.push(l.endsWith(":")?l:"    "+l),lb=()=>".L"+(++n),c0=()=>em("cmpq $0, %rax");
+  const push=()=>{em("pushq %rax");dep++;},pop=r=>{em("popq "+r);dep--;};
+  const alloc=nm=>{slot++;sc[sc.length-1][nm]=-8*slot;return -8*slot;};
+  const find=nm=>{for(let i=sc.length-1;i>=0;i--)if(nm in sc[i])return sc[i][nm];};
+  function E(e){const k=e[0];
+    if(k==="num")em(Math.abs(e[1])<2**31?`movq $${e[1]}, %rax`:`movabsq $${e[1]}, %rax`);
+    else if(k==="var")em(`movq ${find(e[1])}(%rbp), %rax`);
+    else if(k==="assign"){E(e[2]);em(`movq %rax, ${find(e[1])}(%rbp)`);}
+    else if(k==="un"){E(e[2]);if(e[1]==="-")em("negq %rax");else{c0();em("sete %al");em("movzbq %al, %rax");}}
+    else if(k==="bin"){const op=e[1];
+      if(op==="&&"||op==="||"){const sh=lb(),en=lb(),and=op==="&&";
+        for(const s of[e[2],e[3]]){E(s);c0();em((and?"je ":"jne ")+sh);}
+        em(`movq $${and?1:0}, %rax`);em("jmp "+en);em(sh+":");em(`movq $${and?0:1}, %rax`);em(en+":");return;}
+      E(e[2]);push();E(e[3]);em("movq %rax, %rcx");pop("%rax");
+      if(op==="+")em("addq %rcx, %rax");else if(op==="-")em("subq %rcx, %rax");else if(op==="*")em("imulq %rcx, %rax");
+      else if(op==="/"||op==="%"){em("cqto");em("idivq %rcx");if(op==="%")em("movq %rdx, %rax");}
+      else{em("cmpq %rcx, %rax");em("set"+CC[op]+" %al");em("movzbq %al, %rax");}}
+    else{const a=e[2];a.forEach(x=>{E(x);push();});for(let i=a.length-1;i>=0;i--)pop(AR[i]);
+      const pad=dep%2;if(pad)em("subq $8, %rsp");
+      if(e[1]==="print"){em("movq %rdi, %rsi");em("leaq .Lfmt(%rip), %rdi");em("xorl %eax, %eax");em("call printf@PLT");}else em("call "+e[1]);
+      if(pad)em("addq $8, %rsp");}}
+  function S(s){const k=s[0];
+    if(k==="block"){sc.push({});s[1].forEach(S);sc.pop();}
+    else if(k==="decl"){if(s[2])E(s[2]);const off=alloc(s[1]);em(s[2]?`movq %rax, ${off}(%rbp)`:`movq $0, ${off}(%rbp)`);}
+    else if(k==="expr")E(s[1]);
+    else if(k==="ret"){E(s[1]);em("jmp "+ret);}
+    else if(k==="if"){const o2=lb(),en=lb();E(s[1]);c0();em("je "+o2);S(s[2]);em("jmp "+en);em(o2+":");if(s[3])S(s[3]);em(en+":");}
+    else if(k==="while"){const tp=lb(),en=lb();em(tp+":");E(s[1]);c0();em("je "+en);S(s[2]);em("jmp "+tp);em(en+":");}
+    else if(k==="for"){const tp=lb(),en=lb();sc.push({});if(s[1])S(s[1]);em(tp+":");if(s[2]){E(s[2]);c0();em("je "+en);}S(s[4]);if(s[3])E(s[3]);em("jmp "+tp);em(en+":");sc.pop();}}
+  em(".section .rodata");em(".Lfmt:");em('.string "%d\\n"');em(".text");
+  for(const[name,ps,body]of prog){
+    const frame=Math.floor(((ps.length+cnt(body))*8+15)/16)*16;
+    sc=[{}];slot=0;dep=0;ret=".Lret_"+name;
+    em(".globl "+name);em(name+":");em("pushq %rbp");em("movq %rsp, %rbp");if(frame)em(`subq $${frame}, %rsp`);
+    ps.forEach((p,i)=>em(`movq ${AR[i]}, ${alloc(p)}(%rbp)`));
+    S(body);em("movq $0, %rax");em(ret+":");em("leave");em("ret");}
+  em('.section .note.GNU-stack,"",@progbits');
+  return o.join("\n")+"\n";
+}
+function run(prog,out){
+  const F=Object.fromEntries(prog.map(f=>[f[0],f])),mk=()=>Object.create(null);
+  function R(v){this.v=v;}let steps=0;
+  const look=(env,n)=>{for(let i=env.length-1;i>=0;i--)if(n in env[i])return env[i];};
+  const ev=(e,env,d)=>{const k=e[0];
+    if(k==="num")return e[1];
+    if(k==="var")return look(env,e[1])[e[1]];
+    if(k==="assign"){const v=ev(e[2],env,d);look(env,e[1])[e[1]]=v;return v;}
+    if(k==="un"){const v=ev(e[2],env,d);return e[1]==="-"?0-v:+(v===0);}
+    if(k==="bin"){const op=e[1];
+      if(op==="&&")return +(ev(e[2],env,d)!==0&&ev(e[3],env,d)!==0);
+      if(op==="||")return +(ev(e[2],env,d)!==0||ev(e[3],env,d)!==0);
+      const a=ev(e[2],env,d),b=ev(e[3],env,d);
+      switch(op){
+        case"+":return a+b;case"-":return a-b;case"*":return a*b;
+        case"/":case"%":{if(b===0)throw new Error("division by zero");const q=Math.trunc(a/b);return op==="/"?q:a-q*b;}
+        case"<":return +(a<b);case">":return +(a>b);case"<=":return +(a<=b);case">=":return +(a>=b);
+        case"==":return +(a===b);default:return +(a!==b);}}
+    const args=e[2].map(x=>ev(x,env,d));
+    if(e[1]==="print"){if(out.length>=1000)throw new Error("too much output (limit 1000 lines)");out.push(String(args[0]));return 0;}
+    if(d>400)throw new Error("stack overflow (recursion too deep)");
+    const[,ps,body]=F[e[1]];
+    try{ex(body,[Object.assign(mk(),Object.fromEntries(ps.map((p,i)=>[p,args[i]])))],d+1);}catch(r){if(r instanceof R)return r.v;throw r;}
+    return 0;};
+  const ex=(s,env,d)=>{if(++steps>3e6)throw new Error("step limit exceeded (infinite loop?)");const k=s[0],top=()=>env[env.length-1];
+    if(k==="block"){env.push(mk());try{for(const x of s[1])ex(x,env,d);}finally{env.pop();}}
+    else if(k==="decl")top()[s[1]]=s[2]?ev(s[2],env,d):0;
+    else if(k==="expr")ev(s[1],env,d);
+    else if(k==="ret")throw new R(ev(s[1],env,d));
+    else if(k==="if"){if(ev(s[1],env,d))ex(s[2],env,d);else if(s[3])ex(s[3],env,d);}
+    else if(k==="while"){while(ev(s[1],env,d))ex(s[2],env,d);}
+    else if(k==="for"){env.push(mk());try{if(s[1])ex(s[1],env,d);while(!s[2]||ev(s[2],env,d)){ex(s[4],env,d);if(s[3])ev(s[3],env,d);}}finally{env.pop();}}};
+  try{ex(F.main[2],[mk()],0);}catch(r){if(!(r instanceof R))throw r;}
+}
+function pp(x,ind=""){
+  if(!Array.isArray(x))return JSON.stringify(x);
+  const s=JSON.stringify(x);if(s.length<64)return s;
+  return"["+x.map(y=>"\n"+ind+"  "+pp(y,ind+"  ")).join(",")+"\n"+ind+"]";
+}
+//CORE-END
+const EX={
+"Hello":`// The smallest MiniC program.
+int main() {
+    print(42);
+    return 0;
+}`,
+"Factorial (recursion)":`// Recursion: factorial of 1..10
+int factorial(int n) {
+    if (n <= 1) return 1;
+    return n * factorial(n - 1);
+}
+int main() {
+    for (int i = 1; i <= 10; i = i + 1) {
+        print(factorial(i));
+    }
+    return 0;
+}`,
+"Fibonacci (loop)":`// Loop: first 12 Fibonacci numbers
+int main() {
+    int a = 0;
+    int b = 1;
+    int i = 0;
+    while (i < 12) {
+        print(a);
+        int next = a + b;
+        a = b;
+        b = next;
+        i = i + 1;
+    }
+    return 0;
+}`,
+"Primes below 50":`// Nested loops and %
+int is_prime(int n) {
+    if (n < 2) return 0;
+    for (int d = 2; d * d <= n; d = d + 1) {
+        if (n % d == 0) return 0;
+    }
+    return 1;
+}
+int main() {
+    for (int n = 2; n < 50; n = n + 1) {
+        if (is_prime(n)) print(n);
+    }
+    return 0;
+}`,
+"GCD (two parameters)":`// Euclid's algorithm
+int gcd(int a, int b) {
+    while (b != 0) {
+        int t = a % b;
+        a = b;
+        b = t;
+    }
+    return a;
+}
+int main() {
+    print(gcd(48, 18));
+    print(gcd(1071, 462));
+    return 0;
+}`,
+"Error demo":`// Try fixing this: the compiler reports the line number
+int main() {
+    int x = 5;
+    print(y);
+    return 0;
+}`};
+const $=id=>document.getElementById(id),TABS=["Output","Tokens","AST","Assembly"];
+let cur="Output",res={};
+const src=$("src"),pane=$("pane"),st=$("st");
+Object.keys(EX).forEach(k=>$("ex").add(new Option(k,k)));
+TABS.forEach(t=>{const b=document.createElement("button");b.role="tab";b.textContent=t;b.dataset.t=t;
+  b.onclick=()=>{cur=t;show();};$("tabs").appendChild(b);});
+function show(){
+  document.querySelectorAll("[role=tab]").forEach(b=>b.setAttribute("aria-selected",b.dataset.t===cur));
+  pane.textContent=res[cur]??"";
+}
+function go(){
+  res={};st.className="st";
+  try{
+    const T=lex(src.value);res.Tokens=T.map(t=>`${t.k.padEnd(4)}  ${t.v||"(end)"}   line ${t.l}`).join("\n");
+    const P=parse(T);res.AST=P.map(f=>`function ${f[0]}(${f[1].join(", ")})\n${pp(f[2])}`).join("\n\n");
+    check(P);const A=gen(P);res.Assembly=A;
+    const out=[];let note="";
+    try{run(P,out);}catch(e){note="\nruntime error: "+e.message;}
+    res.Output=(out.join("\n")||"(no output)")+note;
+    st.textContent=note?"Compiled, but the program stopped with a runtime error.":`Compiled: ${T.length-1} tokens, ${P.length} function(s), ${A.split("\n").length-1} lines of assembly.`;
+    st.className="st "+(note?"err":"ok");
+  }catch(e){
+    if(!(e instanceof CErr))throw e;
+    res.Output="error: "+e.message;res.Tokens=res.Tokens||"";
+    st.textContent="error: "+e.message;st.className="st err";cur="Output";
+  }
+  show();
+}
+$("ex").onchange=()=>{src.value=EX[$("ex").value];cur="Output";go();};
+$("run").onclick=go;
+src.addEventListener("keydown",e=>{
+  if((e.ctrlKey||e.metaKey)&&e.key==="Enter"){e.preventDefault();go();}
+  if(e.key==="Tab"){e.preventDefault();const s=src.selectionStart;src.setRangeText("    ",s,src.selectionEnd,"end");}
+});
+$("ex").onchange();
+</script>
+</body>
+</html>
