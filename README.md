@@ -6,7 +6,6 @@ Repository: https://github.com/ridafatimazulfiqar/minic-compiler
 
 **Live demo (runs in your browser):** https://ridafatimazulfiqar.github.io/minic-compiler/
 
-## For recruiters: 60-second summary
 **What I built:** a working compiler for a C subset, with every classic stage written by hand and no parser generators or compiler libraries. Output was verified: all example programs give identical results when interpreted and when compiled to native code (10 automated tests).
 
 | Compiler stage | Where | What it does |
